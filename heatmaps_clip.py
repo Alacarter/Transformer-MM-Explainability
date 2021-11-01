@@ -95,8 +95,6 @@ def load_eval_ids_and_file_id_to_annotation_map(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--gpu", type=str, required=False)
-    parser.add_argument("--checkpoint", type=int, required=True)
     parser.add_argument("--num-evals", type=int, required=True)
     # Below: Saliency-like filepaths.
     parser.add_argument("--val-file", type=str, required=True)
@@ -104,7 +102,7 @@ if __name__ == "__main__":
     parser.add_argument("--annotations-path", type=str, required=True)
 
     parser.add_argument("--image-dir", type=str, required=True)
-    parser.add_argument("--output-dir", type=str, default="output_samples")
+    parser.add_argument("--output-dir", type=str, default="output_heatmaps")
     args = parser.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
@@ -124,7 +122,8 @@ if __name__ == "__main__":
     # produce local copy commands
     commands = []
     for eval_id in file_ids_to_eval:
-        command = "scp titan1:{}/{}.jpg .".format(args.output_dir, eval_id)
+        output_path = os.path.join(os.getcwd(), args.output_dir)
+        command = "scp titan1:{}/{}.jpg .".format(output_path, eval_id)
         commands.append(command)
     print("Copy commands")
     print(commands)
