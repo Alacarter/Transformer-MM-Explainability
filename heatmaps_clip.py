@@ -4,8 +4,10 @@ from PIL import Image
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
+import os
+import argparse
 
-def interpret(image, text, model, device, index=None):
+def interpret(image, text, model, device, output_fname, index=None):
     logits_per_image, logits_per_text = model(image, text)
     probs = logits_per_image.softmax(dim=-1).detach().cpu().numpy()
     if index is None:
@@ -49,7 +51,7 @@ def interpret(image, text, model, device, index=None):
     vis = np.uint8(255 * vis)
     vis = cv2.cvtColor(np.array(vis), cv2.COLOR_RGB2BGR)
 
-    plt.imsave("heatmap.png", vis)
+    plt.imsave(output_fname, vis)
 
 
 class color:
@@ -64,13 +66,65 @@ class color:
     UNDERLINE = '\033[4m'
     END = '\033[0m'
 
+def load_eval_ids_and_file_id_to_annotation_map(args):
+    with open(args.val_file, "r") as f:
+        lines = f.readlines()
+        val_ex = []
+        for line in lines:
+            val_ex.append(int(line.rstrip().split(".jpg")[0]))
+
+    with open(args.test_file, "r") as f:
+        lines = f.readlines()
+        test_ex = []
+        for line in lines:
+            test_ex.append(int(line.rstrip().split(".jpg")[0]))
+
+    with open(args.annotations_path, "r") as f:
+        lines = f.readlines()
+        file_id_to_annotation_map = {} # int: str
+        for example in lines:
+            filename, annotation = example.split("\t")
+            file_id = int(filename.split(".jpg")[0]) # removes the .jpg
+            if file_id in test_ex:
+                file_id_to_annotation_map[file_id] = annotation.rstrip()
+
+    np.random.seed(0)
+    file_ids_to_eval = np.random.choice(list(file_id_to_annotation_map.keys()), args.num_evals)
+    print("file_ids_to_eval", file_ids_to_eval)
+    return file_ids_to_eval, file_id_to_annotation_map
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--gpu", type=str, required=False)
+    parser.add_argument("--checkpoint", type=int, required=True)
+    parser.add_argument("--num-evals", type=int, required=True)
+    # Below: Saliency-like filepaths.
+    parser.add_argument("--val-file", type=str, required=True)
+    parser.add_argument("--test-file", type=str, required=True)
+    parser.add_argument("--annotations-path", type=str, required=True)
+
+    parser.add_argument("--image-dir", type=str, required=True)
+    parser.add_argument("--output-dir", type=str, default="output_samples")
+    args = parser.parse_args()
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model, preprocess = clip.load("ViT-B/32", device=device, jit=False)
 
-    image = preprocess(Image.open("CLIP/glasses.png")).unsqueeze(0).to(device)
-    texts = ["a man with eyeglasses"]
-    text = clip.tokenize(texts).to(device)
-    print(color.BOLD + color.PURPLE + color.UNDERLINE + 'text: ' + texts[0] + color.END)
-    interpret(model=model, image=image, text=text, device=device, index=0)
+    file_ids_to_eval, file_id_to_annotation_map = load_eval_ids_and_file_id_to_annotation_map(args)
+
+    for eval_id in file_ids_to_eval:
+        caption = file_id_to_annotation_map[eval_id]
+        image_path = os.path.join(args.image_dir, f"eval_id".jpg)
+        image = preprocess(Image.open(image_path)).unsqueeze(0).to(device)
+        text = clip.tokenize([caption]).to(device)
+        # print(color.BOLD + color.PURPLE + color.UNDERLINE + 'text: ' + texts[0] + color.END)
+        output_fname = f"{eval_id}".jpg
+        interpret(model=model, image=image, text=text, device=device, output_fname=output_fname, index=0)
+
+    # produce local copy commands
+    commands = []
+    for eval_id in file_ids_to_eval:
+        command = "scp titan1:{}/{}.jpg .".format(args.output_dir, eval_id)
+        commands.append(command)
+    print("Copy commands")
+    print(commands)
