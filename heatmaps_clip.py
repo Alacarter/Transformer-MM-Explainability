@@ -1,13 +1,14 @@
 import torch
 import CLIP.clip as clip
-from PIL import Image
+from PIL import Image, ImageDraw
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
 import os
 import argparse
+from tqdm import tqdm
 
-def interpret(image, text, model, device, output_fname, index=None):
+def interpret(image, text, model, device, caption_str, output_fname, index=None):
     logits_per_image, logits_per_text = model(image, text)
     probs = logits_per_image.softmax(dim=-1).detach().cpu().numpy()
     if index is None:
@@ -37,9 +38,10 @@ def interpret(image, text, model, device, output_fname, index=None):
     def show_cam_on_image(img, mask):
         heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
         heatmap = np.float32(heatmap) / 255
-        cam = heatmap + np.float32(img)
+        img = np.float32(img)
+        cam = heatmap + img
         cam = cam / np.max(cam)
-        return cam
+        return cam, img
 
     image_relevance = image_relevance.reshape(1, 1, 7, 7)
     image_relevance = torch.nn.functional.interpolate(image_relevance, size=224, mode='bilinear')
@@ -47,11 +49,22 @@ def interpret(image, text, model, device, output_fname, index=None):
     image_relevance = (image_relevance - image_relevance.min()) / (image_relevance.max() - image_relevance.min())
     image = image[0].permute(1, 2, 0).data.cpu().numpy()
     image = (image - image.min()) / (image.max() - image.min())
-    vis = show_cam_on_image(image, image_relevance)
-    vis = np.uint8(255 * vis)
-    vis = cv2.cvtColor(np.array(vis), cv2.COLOR_RGB2BGR)
+    vis, orig_img = show_cam_on_image(image, image_relevance)
+    vis, orig_img = np.uint8(255 * vis), np.uint8(255 * orig_img)
+    vis = cv2.cvtColor(vis, cv2.COLOR_RGB2BGR)
+    vis_concat = np.concatenate([orig_img, vis], axis=1)
+    vis_concat_captioned = add_caption_to_np_img(vis_concat, caption_str)
+    plt.imsave(output_fname, vis_concat_captioned)
 
-    plt.imsave(output_fname, vis)
+
+def add_caption_to_np_img(im_arr, caption):
+    caption_img = Image.new('RGB', (im_arr.shape[1], 20), (255, 255, 255))
+    # PIL.Image seems to operate on transposed axes
+    d = ImageDraw.Draw(caption_img)
+    d.text((5, 5), caption, fill=(0, 0, 0))
+    caption_img_arr = np.uint8(np.array(caption_img))
+    final_arr = np.concatenate([im_arr, caption_img_arr], axis=0)
+    return final_arr
 
 
 class color:
@@ -105,19 +118,22 @@ if __name__ == "__main__":
     parser.add_argument("--output-dir", type=str, default="output_heatmaps")
     args = parser.parse_args()
 
+    if not os.path.exists(args.output_dir):
+        os.mkdir(args.output_dir)
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model, preprocess = clip.load("ViT-B/32", device=device, jit=False)
 
     file_ids_to_eval, file_id_to_annotation_map = load_eval_ids_and_file_id_to_annotation_map(args)
 
-    for eval_id in file_ids_to_eval:
+    for eval_id in tqdm(file_ids_to_eval):
         caption = file_id_to_annotation_map[eval_id]
-        image_path = os.path.join(args.image_dir, f"eval_id".jpg)
+        image_path = os.path.join(args.image_dir, f"{eval_id}.jpg")
         image = preprocess(Image.open(image_path)).unsqueeze(0).to(device)
         text = clip.tokenize([caption]).to(device)
         # print(color.BOLD + color.PURPLE + color.UNDERLINE + 'text: ' + texts[0] + color.END)
-        output_fname = f"{eval_id}".jpg
-        interpret(model=model, image=image, text=text, device=device, output_fname=output_fname, index=0)
+        output_fname = os.path.join(args.output_dir, f"{eval_id}.jpg")
+        interpret(model=model, image=image, text=text, device=device, caption_str=caption, output_fname=output_fname, index=0)
 
     # produce local copy commands
     commands = []
