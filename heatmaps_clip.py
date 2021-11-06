@@ -1,6 +1,13 @@
 import torch
-import CLIP.clip as clip
+# import CLIP.clip as clip_orig # OpenAI/CLIP
+from clip import clip # open_clip repo
+from clip.model import * # open_clip repo
+from training.main import convert_models_to_fp32 # open_clip repo
+import torch.distributed as dist
+
 from PIL import Image, ImageDraw
+from pathlib import Path
+import json
 import numpy as np
 import cv2
 import matplotlib.pyplot as plt
@@ -8,8 +15,14 @@ import os
 import argparse
 from tqdm import tqdm
 
+MODEL_CONFIGS_DIR = "/scratch/cluster/albertyu/dev/open_clip/src/training/model_configs"
+
 def interpret(image, text, model, device, caption_str, output_fname, index=None):
-    logits_per_image, logits_per_text = model(image, text)
+    image_features, text_features, logit_scale = model(image, text)
+    # cosine similarity as logits
+    logits_per_image = logit_scale * image_features @ text_features.t()
+    logits_per_text = logits_per_image.t()
+
     probs = logits_per_image.softmax(dim=-1).detach().cpu().numpy()
     if index is None:
         index = np.argmax(logits_per_image.cpu().data.numpy(), axis=-1)
@@ -20,7 +33,7 @@ def interpret(image, text, model, device, caption_str, output_fname, index=None)
     model.zero_grad()
     one_hot.backward(retain_graph=True)
 
-    image_attn_blocks = list(dict(model.visual.transformer.resblocks.named_children()).values())
+    image_attn_blocks = list(dict(model.module.visual.transformer.resblocks.named_children()).values())
     num_tokens = image_attn_blocks[0].attn_probs.shape[-1]
     R = torch.eye(num_tokens, num_tokens, dtype=image_attn_blocks[0].attn_probs.dtype).to(device)
     for blk in image_attn_blocks:
@@ -114,6 +127,9 @@ if __name__ == "__main__":
     parser.add_argument("--test-file", type=str, required=True)
     parser.add_argument("--annotations-path", type=str, required=True)
 
+    # open_clip-trained checkpoint
+    parser.add_argument("--checkpoint", type=str, default=None)
+    parser.add_argument("--gpu", type=int, default=None)
     parser.add_argument("--image-dir", type=str, required=True)
     parser.add_argument("--output-dir", type=str, default="output_heatmaps")
     args = parser.parse_args()
@@ -122,7 +138,33 @@ if __name__ == "__main__":
         os.mkdir(args.output_dir)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model, preprocess = clip.load("ViT-B/32", device=device, jit=False)
+    model_class = "ViT-B/32"
+
+    if args.checkpoint:
+        dist.init_process_group(
+            backend="nccl",
+            init_method="tcp://127.0.0.1:6100",
+            world_size=torch.cuda.device_count(),
+            rank=args.gpu,
+        )
+        model_config_file = os.path.join(MODEL_CONFIGS_DIR, f"{model_class.replace('/', '-')}.json")
+        print('Loading model from', model_config_file)
+        assert os.path.exists(model_config_file)
+        with open(model_config_file, 'r') as f:
+            model_info = json.load(f)
+        model = CLIP(**model_info)
+        convert_weights(model)
+        preprocess = clip._transform(model.visual.input_resolution, is_train=False)
+        convert_models_to_fp32(model)
+        model.cuda(args.gpu)
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
+
+        checkpoint = torch.load(args.checkpoint, map_location=device)
+        sd = checkpoint["state_dict"]
+        model.load_state_dict(sd)
+        model.eval()
+    else:
+        model, preprocess = clip.load(model_class, device=device, jit=False)
 
     file_ids_to_eval, file_id_to_annotation_map = load_eval_ids_and_file_id_to_annotation_map(args)
 
