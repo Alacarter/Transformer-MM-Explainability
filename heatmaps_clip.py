@@ -53,7 +53,13 @@ def saliency_map(image, text, model, preprocess, device, im_size, index=0):
     image_relevance = torch.nn.functional.interpolate(image_relevance, size=im_size, mode='bilinear')
     image_relevance = image_relevance.reshape(im_size, im_size).cuda().data.cpu().numpy()
     image_relevance = (image_relevance - image_relevance.min()) / (image_relevance.max() - image_relevance.min())
-    return image_relevance, image
+    image = image[0].permute(1, 2, 0).data.cpu().numpy()
+    image = (image - image.min()) / (image.max() - image.min())
+    pil_image = Image.fromarray(np.uint8(255 * image))
+    image = pil_image.resize((im_size, im_size), resample=PIL.Image.BICUBIC)
+    image = np.float32(np.array(image)) / 255
+    attn_dot_im = np.tile(np.expand_dims(image_relevance, axis=-1), (1, 1, 3)) * image
+    return attn_dot_im, image_relevance, image
 
 
 def save_heatmap(image, text, model, preprocess, device, output_fname, im_size=224):
@@ -66,14 +72,8 @@ def save_heatmap(image, text, model, preprocess, device, output_fname, im_size=2
         cam = cam / np.max(cam)
         return cam, img
 
-    image_relevance, image = saliency_map(image, text, model, preprocess, device, im_size=im_size)
-    image = image[0].permute(1, 2, 0).data.cpu().numpy()
-    image = (image - image.min()) / (image.max() - image.min())
-    pil_image = Image.fromarray(np.uint8(255 * image))
-    image = pil_image.resize((im_size, im_size), resample=PIL.Image.BICUBIC)
-    image = np.float32(np.array(image)) / 255
-    attn_dot_im = np.tile(np.expand_dims(image_relevance, axis=-1), (1, 1, 3)) * image
-    vis, orig_img = show_cam_on_image(image, image_relevance)
+    attn_dot_im, attn, image = saliency_map(image, text, model, preprocess, device, im_size=im_size)
+    vis, orig_img = show_cam_on_image(image, attn)
     vis, orig_img = np.uint8(255 * vis), np.uint8(255 * orig_img)
     attn_dot_im = np.uint8(255 * attn_dot_im)
     vis = cv2.cvtColor(vis, cv2.COLOR_RGB2BGR)
