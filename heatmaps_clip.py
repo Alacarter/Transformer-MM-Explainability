@@ -5,6 +5,7 @@ from clip.model import * # open_clip repo
 from training.main import convert_models_to_fp32 # open_clip repo
 import torch.distributed as dist
 
+import PIL
 from PIL import Image, ImageDraw
 from pathlib import Path
 import json
@@ -17,7 +18,7 @@ from tqdm import tqdm
 
 MODEL_CONFIGS_DIR = "/scratch/cluster/albertyu/dev/open_clip/src/training/model_configs"
 
-def saliency_map(image, text, model, preprocess, device, index=0):
+def saliency_map(image, text, model, preprocess, device, im_size, index=0):
     image = preprocess(Image.fromarray(image)).unsqueeze(0).to(device)
     text = clip.tokenize([caption]).to(device)
     image_features, text_features, logit_scale = model(image, text)
@@ -49,13 +50,13 @@ def saliency_map(image, text, model, preprocess, device, index=0):
     R[0, 0] = 0
     image_relevance = R[0, 1:]
     image_relevance = image_relevance.reshape(1, 1, 7, 7)
-    image_relevance = torch.nn.functional.interpolate(image_relevance, size=224, mode='bilinear')
-    image_relevance = image_relevance.reshape(224, 224).cuda().data.cpu().numpy()
+    image_relevance = torch.nn.functional.interpolate(image_relevance, size=im_size, mode='bilinear')
+    image_relevance = image_relevance.reshape(im_size, im_size).cuda().data.cpu().numpy()
     image_relevance = (image_relevance - image_relevance.min()) / (image_relevance.max() - image_relevance.min())
     return image_relevance, image
 
 
-def save_heatmap(image, text, model, preprocess, device, output_fname):
+def save_heatmap(image, text, model, preprocess, device, output_fname, im_size=224):
     # create heatmap from mask on image
     def show_cam_on_image(img, mask):
         heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
@@ -65,13 +66,18 @@ def save_heatmap(image, text, model, preprocess, device, output_fname):
         cam = cam / np.max(cam)
         return cam, img
 
-    image_relevance, image = saliency_map(image, text, model, preprocess, device)
+    image_relevance, image = saliency_map(image, text, model, preprocess, device, im_size=im_size)
     image = image[0].permute(1, 2, 0).data.cpu().numpy()
     image = (image - image.min()) / (image.max() - image.min())
+    pil_image = Image.fromarray(np.uint8(255 * image))
+    image = pil_image.resize((im_size, im_size), resample=PIL.Image.BICUBIC)
+    image = np.float32(np.array(image)) / 255
+    attn_dot_im = np.tile(np.expand_dims(image_relevance, axis=-1), (1, 1, 3)) * image
     vis, orig_img = show_cam_on_image(image, image_relevance)
     vis, orig_img = np.uint8(255 * vis), np.uint8(255 * orig_img)
+    attn_dot_im = np.uint8(255 * attn_dot_im)
     vis = cv2.cvtColor(vis, cv2.COLOR_RGB2BGR)
-    vis_concat = np.concatenate([orig_img, vis], axis=1)
+    vis_concat = np.concatenate([orig_img, vis, attn_dot_im], axis=1)
     vis_concat_captioned = add_caption_to_np_img(vis_concat, text)
     plt.imsave(output_fname, vis_concat_captioned)
 
@@ -144,6 +150,7 @@ if __name__ == "__main__":
     parser.add_argument("--gpu", type=int, default=None)
     parser.add_argument("--image-dir", type=str, required=True)
     parser.add_argument("--output-dir", type=str, default="output_heatmaps")
+    parser.add_argument("--im-size", type=int, default=224)
     args = parser.parse_args()
 
     if not os.path.exists(args.output_dir):
@@ -186,7 +193,7 @@ if __name__ == "__main__":
         image_arr = np.array(Image.open(image_path))
         # print(color.BOLD + color.PURPLE + color.UNDERLINE + 'text: ' + texts[0] + color.END)
         output_fname = os.path.join(args.output_dir, f"{eval_id}.jpg")
-        save_heatmap(image_arr, caption, model, preprocess, device, output_fname)
+        save_heatmap(image_arr, caption, model, preprocess, device, output_fname, args.im_size)
 
     # produce local copy commands
     commands = []
