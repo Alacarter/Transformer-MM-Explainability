@@ -17,7 +17,9 @@ from tqdm import tqdm
 
 MODEL_CONFIGS_DIR = "/scratch/cluster/albertyu/dev/open_clip/src/training/model_configs"
 
-def interpret(image, text, model, device, caption_str, output_fname, index=None):
+def saliency_map(image, text, model, preprocess, device, index=0):
+    image = preprocess(Image.fromarray(image)).unsqueeze(0).to(device)
+    text = clip.tokenize([caption]).to(device)
     image_features, text_features, logit_scale = model(image, text)
     # cosine similarity as logits
     logits_per_image = logit_scale * image_features @ text_features.t()
@@ -46,7 +48,14 @@ def interpret(image, text, model, device, caption_str, output_fname, index=None)
         R += torch.matmul(cam, R)
     R[0, 0] = 0
     image_relevance = R[0, 1:]
+    image_relevance = image_relevance.reshape(1, 1, 7, 7)
+    image_relevance = torch.nn.functional.interpolate(image_relevance, size=224, mode='bilinear')
+    image_relevance = image_relevance.reshape(224, 224).cuda().data.cpu().numpy()
+    image_relevance = (image_relevance - image_relevance.min()) / (image_relevance.max() - image_relevance.min())
+    return image_relevance, image
 
+
+def save_heatmap(image, text, model, preprocess, device, output_fname):
     # create heatmap from mask on image
     def show_cam_on_image(img, mask):
         heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
@@ -56,17 +65,14 @@ def interpret(image, text, model, device, caption_str, output_fname, index=None)
         cam = cam / np.max(cam)
         return cam, img
 
-    image_relevance = image_relevance.reshape(1, 1, 7, 7)
-    image_relevance = torch.nn.functional.interpolate(image_relevance, size=224, mode='bilinear')
-    image_relevance = image_relevance.reshape(224, 224).cuda().data.cpu().numpy()
-    image_relevance = (image_relevance - image_relevance.min()) / (image_relevance.max() - image_relevance.min())
+    image_relevance, image = saliency_map(image, text, model, preprocess, device)
     image = image[0].permute(1, 2, 0).data.cpu().numpy()
     image = (image - image.min()) / (image.max() - image.min())
     vis, orig_img = show_cam_on_image(image, image_relevance)
     vis, orig_img = np.uint8(255 * vis), np.uint8(255 * orig_img)
     vis = cv2.cvtColor(vis, cv2.COLOR_RGB2BGR)
     vis_concat = np.concatenate([orig_img, vis], axis=1)
-    vis_concat_captioned = add_caption_to_np_img(vis_concat, caption_str)
+    vis_concat_captioned = add_caption_to_np_img(vis_concat, text)
     plt.imsave(output_fname, vis_concat_captioned)
 
 
@@ -177,11 +183,10 @@ if __name__ == "__main__":
     for eval_id in tqdm(file_ids_to_eval):
         caption = file_id_to_annotation_map[eval_id]
         image_path = os.path.join(args.image_dir, f"{eval_id}.jpg")
-        image = preprocess(Image.open(image_path)).unsqueeze(0).to(device)
-        text = clip.tokenize([caption]).to(device)
+        image_arr = np.array(Image.open(image_path))
         # print(color.BOLD + color.PURPLE + color.UNDERLINE + 'text: ' + texts[0] + color.END)
         output_fname = os.path.join(args.output_dir, f"{eval_id}.jpg")
-        interpret(model=model, image=image, text=text, device=device, caption_str=caption, output_fname=output_fname, index=0)
+        save_heatmap(image_arr, caption, model, preprocess, device, output_fname)
 
     # produce local copy commands
     commands = []
