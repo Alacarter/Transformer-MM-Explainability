@@ -104,6 +104,7 @@ class color:
     UNDERLINE = '\033[4m'
     END = '\033[0m'
 
+
 def load_eval_ids_and_file_id_to_annotation_map(args):
     with open(args.val_file, "r") as f:
         lines = f.readlines()
@@ -137,6 +138,39 @@ def load_eval_ids_and_file_id_to_annotation_map(args):
     print("file_ids_to_eval", file_ids_to_eval)
     return file_ids_to_eval, file_id_to_annotation_map
 
+
+def load_model_preprocess(checkpoint, gpu=0):
+    model_class = "ViT-B/32"
+
+    if checkpoint:
+        dist.init_process_group(
+            backend="nccl",
+            init_method="tcp://127.0.0.1:6100",
+            world_size=torch.cuda.device_count(),
+            rank=gpu,
+        )
+        model_config_file = os.path.join(MODEL_CONFIGS_DIR, f"{model_class.replace('/', '-')}.json")
+        print('Loading model from', model_config_file)
+        assert os.path.exists(model_config_file)
+        with open(model_config_file, 'r') as f:
+            model_info = json.load(f)
+        model = CLIP(**model_info)
+        convert_weights(model)
+        preprocess = clip._transform(model.visual.input_resolution, is_train=False, color_jitter=False)
+        convert_models_to_fp32(model)
+        model.cuda(gpu)
+        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[gpu])
+
+        checkpoint = torch.load(checkpoint, map_location=device)
+        sd = checkpoint["state_dict"]
+        model.load_state_dict(sd)
+        model.eval()
+    else:
+        model, preprocess = clip.load(model_class, device=device, jit=False)
+
+    return model, preprocess
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--num-evals", type=int, required=True)
@@ -157,33 +191,7 @@ if __name__ == "__main__":
         os.mkdir(args.output_dir)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model_class = "ViT-B/32"
-
-    if args.checkpoint:
-        dist.init_process_group(
-            backend="nccl",
-            init_method="tcp://127.0.0.1:6100",
-            world_size=torch.cuda.device_count(),
-            rank=args.gpu,
-        )
-        model_config_file = os.path.join(MODEL_CONFIGS_DIR, f"{model_class.replace('/', '-')}.json")
-        print('Loading model from', model_config_file)
-        assert os.path.exists(model_config_file)
-        with open(model_config_file, 'r') as f:
-            model_info = json.load(f)
-        model = CLIP(**model_info)
-        convert_weights(model)
-        preprocess = clip._transform(model.visual.input_resolution, is_train=False, color_jitter=False)
-        convert_models_to_fp32(model)
-        model.cuda(args.gpu)
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
-
-        checkpoint = torch.load(args.checkpoint, map_location=device)
-        sd = checkpoint["state_dict"]
-        model.load_state_dict(sd)
-        model.eval()
-    else:
-        model, preprocess = clip.load(model_class, device=device, jit=False)
+    model, preprocess = load_model_preprocess(args.checkpoint, args.gpu)
 
     file_ids_to_eval, file_id_to_annotation_map = load_eval_ids_and_file_id_to_annotation_map(args)
 
