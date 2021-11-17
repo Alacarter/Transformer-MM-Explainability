@@ -116,6 +116,12 @@ def load_eval_ids_and_file_id_to_annotation_map(args):
 
     np.random.seed(0)
     file_ids_to_eval = np.random.choice(list(file_id_to_annotation_map.keys()), args.num_evals)
+    wall_only_file_ids = [key for key in file_id_to_annotation_map if file_id_to_annotation_map[key] == "wall"]
+    wall_pair_file_ids = [key for key in file_id_to_annotation_map
+        if ("wall" in file_id_to_annotation_map[key]) and
+        (len(file_id_to_annotation_map[key].split(" ")) == 2)
+    ]
+    file_ids_to_eval = np.concatenate((file_ids_to_eval, np.array(wall_only_file_ids), np.array(wall_pair_file_ids)))
     print("file_ids_to_eval", file_ids_to_eval)
     return file_ids_to_eval, file_id_to_annotation_map
 
@@ -154,7 +160,7 @@ if __name__ == "__main__":
             model_info = json.load(f)
         model = CLIP(**model_info)
         convert_weights(model)
-        preprocess = clip._transform(model.visual.input_resolution, is_train=False)
+        preprocess = clip._transform(model.visual.input_resolution, is_train=False, color_jitter=False)
         convert_models_to_fp32(model)
         model.cuda(args.gpu)
         model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[args.gpu])
