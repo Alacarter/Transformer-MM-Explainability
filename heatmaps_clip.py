@@ -139,7 +139,7 @@ def load_eval_ids_and_file_id_to_annotation_map(args):
     return file_ids_to_eval, file_id_to_annotation_map
 
 
-def load_model_preprocess(checkpoint, gpu=0):
+def load_model_preprocess(checkpoint, gpu=0, freeze_clip=True):
     model_class = "ViT-B/32"
 
     if checkpoint:
@@ -164,7 +164,13 @@ def load_model_preprocess(checkpoint, gpu=0):
         checkpoint = torch.load(checkpoint, map_location=device)
         sd = checkpoint["state_dict"]
         model.load_state_dict(sd)
-        model.eval()
+
+        if freeze_clip:
+            print("Freezing clip")
+            model.eval()
+        else:
+            print("Allowing clip to be finetuneable")
+            model.train()
     else:
         model, preprocess = clip.load(model_class, device=device, jit=False)
 
