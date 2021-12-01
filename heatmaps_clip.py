@@ -159,7 +159,7 @@ def load_eval_ids_and_file_id_to_annotation_map(args):
     return file_ids_to_eval, file_id_to_annotation_map
 
 
-def load_model_preprocess(checkpoint, gpu=0, freeze_clip=True):
+def load_model_preprocess(checkpoint, gpu=0, device="cuda", freeze_clip=True):
     model_class = "ViT-B/32"
 
     if checkpoint:
