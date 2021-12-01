@@ -15,12 +15,14 @@ import matplotlib.pyplot as plt
 import os
 import argparse
 from tqdm import tqdm
+import time
 
 MODEL_CONFIGS_DIR = "/scratch/cluster/albertyu/dev/open_clip/src/training/model_configs"
 
 def saliency_map(image, text, model, preprocess, device, im_size, index=0):
-    image = preprocess(Image.fromarray(image)).unsqueeze(0).to(device)
-    text = clip.tokenize([caption]).to(device)
+    image = torch.cat([preprocess(Image.fromarray(im)).unsqueeze(0).to(device) for im in image])
+    # image = preprocess(image).unsqueeze(0).to(device)
+    text = clip.tokenize(text).to(device)
     image_features, text_features, logit_scale = model(image, text)
     # cosine similarity as logits
     logits_per_image = logit_scale * image_features @ text_features.t()
@@ -29,8 +31,9 @@ def saliency_map(image, text, model, preprocess, device, im_size, index=0):
     probs = logits_per_image.softmax(dim=-1).detach().cpu().numpy()
     if index is None:
         index = np.argmax(logits_per_image.cpu().data.numpy(), axis=-1)
-    one_hot = np.zeros((1, logits_per_image.size()[-1]), dtype=np.float32)
-    one_hot[0, index] = 1
+    # one_hot = np.zeros((1, logits_per_image.size()[-1]), dtype=np.float32)
+    one_hot = np.eye(image.shape[0], logits_per_image.size()[-1], dtype=np.float32)
+    # one_hot[0, index] = 1
     one_hot = torch.from_numpy(one_hot).requires_grad_(True)
     one_hot = torch.sum(one_hot.cuda() * logits_per_image)
     model.zero_grad()
@@ -195,13 +198,23 @@ if __name__ == "__main__":
 
     file_ids_to_eval, file_id_to_annotation_map = load_eval_ids_and_file_id_to_annotation_map(args)
 
-    for eval_id in tqdm(file_ids_to_eval):
-        caption = file_id_to_annotation_map[eval_id]
-        image_path = os.path.join(args.image_dir, f"{eval_id}.jpg")
-        image_arr = np.array(Image.open(image_path))
-        # print(color.BOLD + color.PURPLE + color.UNDERLINE + 'text: ' + texts[0] + color.END)
-        output_fname = os.path.join(args.output_dir, f"{eval_id}.jpg")
-        save_heatmap(image_arr, caption, model, preprocess, device, output_fname, args.im_size)
+    file_ids_to_eval = file_ids_to_eval[:2]
+    text = [file_id_to_annotation_map[eval_id] for eval_id in file_ids_to_eval]
+    image_paths = [os.path.join(args.image_dir, f"{eval_id}.jpg") for eval_id in file_ids_to_eval]
+    image = np.array([np.array(Image.open(image_path)) for image_path in image_paths])
+
+    attn_dot_im, attn, image = saliency_map(image, text, model, preprocess, device, args.im_size)
+    print("attn_dot_im", attn_dot_im.shape)
+    print("attn", attn.shape)
+    print("image", image.shape)
+
+    # for eval_id in tqdm(file_ids_to_eval):
+    #     caption = file_id_to_annotation_map[eval_id]
+    #     image_path = os.path.join(args.image_dir, f"{eval_id}.jpg")
+    #     image_arr = np.array(Image.open(image_path))
+    #     # print(color.BOLD + color.PURPLE + color.UNDERLINE + 'text: ' + texts[0] + color.END)
+    #     output_fname = os.path.join(args.output_dir, f"{eval_id}.jpg")
+    #     save_heatmap(image_arr, caption, model, preprocess, device, output_fname, args.im_size)
 
     # produce local copy commands
     commands = []
