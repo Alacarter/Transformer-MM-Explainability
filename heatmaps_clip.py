@@ -57,7 +57,8 @@ def saliency_map(images, texts, model, preprocess, device, im_size):
 
     images = torch.cat([preprocess(Image.fromarray(im)).unsqueeze(0).to(device) for im in images])
     # image = preprocess(image).unsqueeze(0).to(device)
-    texts = clip.tokenize(texts).to(device)
+    # Assumes that texts is already a torch long tensor.
+    texts = texts.long()
     image_features, text_features, logit_scale = model(images, texts)
     # cosine similarity as logits
     logits_per_image = logit_scale * image_features @ text_features.t()
@@ -77,7 +78,7 @@ def saliency_map(images, texts, model, preprocess, device, im_size):
     return np.array(attn_dot_ims), np.array(image_relevances), np.array(processed_images)
 
 
-def save_heatmap(images, texts, model, preprocess, device, output_fnames, im_size=224):
+def save_heatmap(images, texts, text_strs, model, preprocess, device, output_fnames, im_size=224):
     # create heatmap from mask on image
     def show_cam_on_image(img, mask):
         heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
@@ -92,7 +93,7 @@ def save_heatmap(images, texts, model, preprocess, device, output_fnames, im_siz
     for i in range(len(images)):
         attn_dot_im, attn, image = attn_dot_ims[i], attns[i], images[i]
         output_fname = output_fnames[i]
-        text = texts[i]
+        text = text_strs[i]
         vis, orig_img = show_cam_on_image(image, attn)
         vis, orig_img = np.uint8(255 * vis), np.uint8(255 * orig_img)
         attn_dot_im = np.uint8(255 * attn_dot_im)
@@ -222,11 +223,12 @@ if __name__ == "__main__":
     file_ids_to_eval, file_id_to_annotation_map = load_eval_ids_and_file_id_to_annotation_map(args)
 
     # file_ids_to_eval = file_ids_to_eval[:2]
-    texts = [file_id_to_annotation_map[eval_id] for eval_id in file_ids_to_eval]
     image_paths = [os.path.join(args.image_dir, f"{eval_id}.jpg") for eval_id in file_ids_to_eval]
     images = np.array([np.array(Image.open(image_path)) for image_path in image_paths])
+    text_strs = [file_id_to_annotation_map[eval_id] for eval_id in file_ids_to_eval]
+    texts = clip.tokenize(texts).to(device)
     output_fnames = [os.path.join(args.output_dir, f"{eval_id}.jpg") for eval_id in file_ids_to_eval]
-    save_heatmap(images, texts, model, preprocess, device, output_fnames, args.im_size)
+    save_heatmap(images, texts, text_strs, model, preprocess, device, output_fnames, args.im_size)
 
     # attn_dot_im, attn, image = saliency_map(image, text, model, preprocess, device, args.im_size)
     # print("attn_dot_im", attn_dot_im.shape)
