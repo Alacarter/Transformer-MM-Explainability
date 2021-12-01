@@ -47,7 +47,7 @@ def saliency_map(images, texts, model, preprocess, device, im_size):
         image_relevance = torch.nn.functional.interpolate(image_relevance, size=im_size, mode='bilinear')
         image_relevance = image_relevance.reshape(im_size, im_size).cuda().data.cpu().numpy()
         image_relevance = (image_relevance - image_relevance.min()) / (image_relevance.max() - image_relevance.min())
-        image = image[0].permute(1, 2, 0).data.cpu().numpy()
+        image = images[index].permute(1, 2, 0).data.cpu().numpy()
         image = (image - image.min()) / (image.max() - image.min())
         pil_image = Image.fromarray(np.uint8(255 * image))
         image = pil_image.resize((im_size, im_size), resample=PIL.Image.BICUBIC)
@@ -67,14 +67,14 @@ def saliency_map(images, texts, model, preprocess, device, im_size):
 
     attn_dot_ims = []
     image_relevances = []
-    images = []
-    for index in range(image.shape[0]):
+    processed_images = []
+    for index in range(images.shape[0]):
         attn_dot_im, image_relevance, image = create_single_saliency_map(index, logits_per_image, images, im_size)
         attn_dot_ims.append(attn_dot_im)
         image_relevances.append(image_relevance)
-        images.append(image)
+        processed_images.append(image)
 
-    return np.array(attn_dot_ims), np.array(image_relevances), np.array(images)
+    return np.array(attn_dot_ims), np.array(image_relevances), np.array(processed_images)
 
 
 def save_heatmap(images, texts, model, preprocess, device, output_fnames, im_size=224):
@@ -92,6 +92,7 @@ def save_heatmap(images, texts, model, preprocess, device, output_fnames, im_siz
     for i in range(len(images)):
         attn_dot_im, attn, image = attn_dot_ims[i], attns[i], images[i]
         output_fname = output_fnames[i]
+        text = texts[i]
         vis, orig_img = show_cam_on_image(image, attn)
         vis, orig_img = np.uint8(255 * vis), np.uint8(255 * orig_img)
         attn_dot_im = np.uint8(255 * attn_dot_im)
@@ -220,7 +221,7 @@ if __name__ == "__main__":
 
     file_ids_to_eval, file_id_to_annotation_map = load_eval_ids_and_file_id_to_annotation_map(args)
 
-    file_ids_to_eval = file_ids_to_eval[:2]
+    # file_ids_to_eval = file_ids_to_eval[:2]
     texts = [file_id_to_annotation_map[eval_id] for eval_id in file_ids_to_eval]
     image_paths = [os.path.join(args.image_dir, f"{eval_id}.jpg") for eval_id in file_ids_to_eval]
     images = np.array([np.array(Image.open(image_path)) for image_path in image_paths])
