@@ -19,53 +19,65 @@ import time
 
 MODEL_CONFIGS_DIR = "/scratch/cluster/albertyu/dev/open_clip/src/training/model_configs"
 
-def saliency_map(image, text, model, preprocess, device, im_size, index=0):
-    image = torch.cat([preprocess(Image.fromarray(im)).unsqueeze(0).to(device) for im in image])
+def saliency_map(images, texts, model, preprocess, device, im_size):
+    def create_single_saliency_map(index, logits_per_image, images, im_size):
+        # one_hot = np.zeros((1, logits_per_image.size()[-1]), dtype=np.float32)
+        one_hot = np.zeros((images.shape[0], logits_per_image.size()[-1]), dtype=np.float32)
+        # one_hot[0, index] = 1
+        one_hot[index, index] = 1
+        one_hot = torch.from_numpy(one_hot).requires_grad_(True)
+        one_hot = torch.sum(one_hot.cuda() * logits_per_image)
+        model.zero_grad()
+        one_hot.backward(retain_graph=True)
+
+        image_attn_blocks = list(dict(model.module.visual.transformer.resblocks.named_children()).values())
+        num_tokens = image_attn_blocks[0].attn_probs.shape[-1]
+        R = torch.eye(num_tokens, num_tokens, dtype=image_attn_blocks[0].attn_probs.dtype).to(device)
+        for blk in image_attn_blocks:
+            grad = blk.attn_grad
+            cam = blk.attn_probs
+            cam = cam.reshape(-1, cam.shape[-1], cam.shape[-1])
+            grad = grad.reshape(-1, grad.shape[-1], grad.shape[-1])
+            cam = grad * cam
+            cam = cam.clamp(min=0).mean(dim=0)
+            R += torch.matmul(cam, R)
+        R[0, 0] = 0
+        image_relevance = R[0, 1:]
+        image_relevance = image_relevance.reshape(1, 1, 7, 7)
+        image_relevance = torch.nn.functional.interpolate(image_relevance, size=im_size, mode='bilinear')
+        image_relevance = image_relevance.reshape(im_size, im_size).cuda().data.cpu().numpy()
+        image_relevance = (image_relevance - image_relevance.min()) / (image_relevance.max() - image_relevance.min())
+        image = image[0].permute(1, 2, 0).data.cpu().numpy()
+        image = (image - image.min()) / (image.max() - image.min())
+        pil_image = Image.fromarray(np.uint8(255 * image))
+        image = pil_image.resize((im_size, im_size), resample=PIL.Image.BICUBIC)
+        image = np.float32(np.array(image)) / 255
+        attn_dot_im = np.tile(np.expand_dims(image_relevance, axis=-1), (1, 1, 3)) * image
+        return attn_dot_im, image_relevance, image
+
+    images = torch.cat([preprocess(Image.fromarray(im)).unsqueeze(0).to(device) for im in images])
     # image = preprocess(image).unsqueeze(0).to(device)
-    text = clip.tokenize(text).to(device)
-    image_features, text_features, logit_scale = model(image, text)
+    texts = clip.tokenize(texts).to(device)
+    image_features, text_features, logit_scale = model(images, texts)
     # cosine similarity as logits
     logits_per_image = logit_scale * image_features @ text_features.t()
     logits_per_text = logits_per_image.t()
 
-    probs = logits_per_image.softmax(dim=-1).detach().cpu().numpy()
-    if index is None:
-        index = np.argmax(logits_per_image.cpu().data.numpy(), axis=-1)
-    # one_hot = np.zeros((1, logits_per_image.size()[-1]), dtype=np.float32)
-    one_hot = np.eye(image.shape[0], logits_per_image.size()[-1], dtype=np.float32)
-    # one_hot[0, index] = 1
-    one_hot = torch.from_numpy(one_hot).requires_grad_(True)
-    one_hot = torch.sum(one_hot.cuda() * logits_per_image)
-    model.zero_grad()
-    one_hot.backward(retain_graph=True)
+    probs = logits_per_image.softmax(dim=-1).detach().cpu().numpy() # doesn't seem to be used??
 
-    image_attn_blocks = list(dict(model.module.visual.transformer.resblocks.named_children()).values())
-    num_tokens = image_attn_blocks[0].attn_probs.shape[-1]
-    R = torch.eye(num_tokens, num_tokens, dtype=image_attn_blocks[0].attn_probs.dtype).to(device)
-    for blk in image_attn_blocks:
-        grad = blk.attn_grad
-        cam = blk.attn_probs
-        cam = cam.reshape(-1, cam.shape[-1], cam.shape[-1])
-        grad = grad.reshape(-1, grad.shape[-1], grad.shape[-1])
-        cam = grad * cam
-        cam = cam.clamp(min=0).mean(dim=0)
-        R += torch.matmul(cam, R)
-    R[0, 0] = 0
-    image_relevance = R[0, 1:]
-    image_relevance = image_relevance.reshape(1, 1, 7, 7)
-    image_relevance = torch.nn.functional.interpolate(image_relevance, size=im_size, mode='bilinear')
-    image_relevance = image_relevance.reshape(im_size, im_size).cuda().data.cpu().numpy()
-    image_relevance = (image_relevance - image_relevance.min()) / (image_relevance.max() - image_relevance.min())
-    image = image[0].permute(1, 2, 0).data.cpu().numpy()
-    image = (image - image.min()) / (image.max() - image.min())
-    pil_image = Image.fromarray(np.uint8(255 * image))
-    image = pil_image.resize((im_size, im_size), resample=PIL.Image.BICUBIC)
-    image = np.float32(np.array(image)) / 255
-    attn_dot_im = np.tile(np.expand_dims(image_relevance, axis=-1), (1, 1, 3)) * image
-    return attn_dot_im, image_relevance, image
+    attn_dot_ims = []
+    image_relevances = []
+    images = []
+    for index in range(image.shape[0]):
+        attn_dot_im, image_relevance, image = create_single_saliency_map(index, logits_per_image, images, im_size)
+        attn_dot_ims.append(attn_dot_im)
+        image_relevances.append(image_relevance)
+        images.append(image)
+
+    return np.array(attn_dot_ims), np.array(image_relevances), np.array(images)
 
 
-def save_heatmap(image, text, model, preprocess, device, output_fname, im_size=224):
+def save_heatmap(images, texts, model, preprocess, device, output_fnames, im_size=224):
     # create heatmap from mask on image
     def show_cam_on_image(img, mask):
         heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
@@ -75,14 +87,18 @@ def save_heatmap(image, text, model, preprocess, device, output_fname, im_size=2
         cam = cam / np.max(cam)
         return cam, img
 
-    attn_dot_im, attn, image = saliency_map(image, text, model, preprocess, device, im_size=im_size)
-    vis, orig_img = show_cam_on_image(image, attn)
-    vis, orig_img = np.uint8(255 * vis), np.uint8(255 * orig_img)
-    attn_dot_im = np.uint8(255 * attn_dot_im)
-    vis = cv2.cvtColor(vis, cv2.COLOR_RGB2BGR)
-    vis_concat = np.concatenate([orig_img, vis, attn_dot_im], axis=1)
-    vis_concat_captioned = add_caption_to_np_img(vis_concat, text)
-    plt.imsave(output_fname, vis_concat_captioned)
+    attn_dot_ims, attns, images = saliency_map(images, texts, model, preprocess, device, im_size=im_size)
+
+    for i in range(len(images)):
+        attn_dot_im, attn, image = attn_dot_ims[i], attns[i], images[i]
+        output_fname = output_fnames[i]
+        vis, orig_img = show_cam_on_image(image, attn)
+        vis, orig_img = np.uint8(255 * vis), np.uint8(255 * orig_img)
+        attn_dot_im = np.uint8(255 * attn_dot_im)
+        vis = cv2.cvtColor(vis, cv2.COLOR_RGB2BGR)
+        vis_concat = np.concatenate([orig_img, vis, attn_dot_im], axis=1)
+        vis_concat_captioned = add_caption_to_np_img(vis_concat, text)
+        plt.imsave(output_fname, vis_concat_captioned)
 
 
 def add_caption_to_np_img(im_arr, caption):
@@ -205,14 +221,17 @@ if __name__ == "__main__":
     file_ids_to_eval, file_id_to_annotation_map = load_eval_ids_and_file_id_to_annotation_map(args)
 
     file_ids_to_eval = file_ids_to_eval[:2]
-    text = [file_id_to_annotation_map[eval_id] for eval_id in file_ids_to_eval]
+    texts = [file_id_to_annotation_map[eval_id] for eval_id in file_ids_to_eval]
     image_paths = [os.path.join(args.image_dir, f"{eval_id}.jpg") for eval_id in file_ids_to_eval]
-    image = np.array([np.array(Image.open(image_path)) for image_path in image_paths])
+    images = np.array([np.array(Image.open(image_path)) for image_path in image_paths])
+    output_fnames = [os.path.join(args.output_dir, f"{eval_id}.jpg") for eval_id in file_ids_to_eval]
+    save_heatmap(images, texts, model, preprocess, device, output_fnames, args.im_size)
 
-    attn_dot_im, attn, image = saliency_map(image, text, model, preprocess, device, args.im_size)
-    print("attn_dot_im", attn_dot_im.shape)
-    print("attn", attn.shape)
-    print("image", image.shape)
+    # attn_dot_im, attn, image = saliency_map(image, text, model, preprocess, device, args.im_size)
+    # print("attn_dot_im", attn_dot_im.shape)
+    # print("attn", attn.shape)
+    # print("image", image.shape)
+
 
     # for eval_id in tqdm(file_ids_to_eval):
     #     caption = file_id_to_annotation_map[eval_id]
