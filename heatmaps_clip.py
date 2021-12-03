@@ -26,7 +26,7 @@ def saliency_map(images, texts, model, preprocess, device, im_size):
         # one_hot[0, index] = 1
         one_hot[index, index] = 1
         one_hot = torch.from_numpy(one_hot).requires_grad_(True)
-        one_hot = torch.sum(one_hot.cuda() * logits_per_image)
+        one_hot = torch.sum(one_hot.to(device) * logits_per_image)
         model.zero_grad()
         one_hot.backward(retain_graph=True)
 
@@ -45,7 +45,7 @@ def saliency_map(images, texts, model, preprocess, device, im_size):
         image_relevance = R[0, 1:]
         image_relevance = image_relevance.reshape(1, 1, 7, 7)
         image_relevance = torch.nn.functional.interpolate(image_relevance, size=im_size, mode='bilinear')
-        image_relevance = image_relevance.reshape(im_size, im_size).cuda().data.cpu().numpy()
+        image_relevance = image_relevance.reshape(im_size, im_size).to(device).data.cpu().numpy()
         image_relevance = (image_relevance - image_relevance.min()) / (image_relevance.max() - image_relevance.min())
         image = images[index].permute(1, 2, 0).data.cpu().numpy()
         image = (image - image.min()) / (image.max() - image.min())
@@ -57,7 +57,8 @@ def saliency_map(images, texts, model, preprocess, device, im_size):
 
     images = torch.cat([preprocess(Image.fromarray(im)).unsqueeze(0).to(device) for im in images])
     # image = preprocess(image).unsqueeze(0).to(device)
-    texts = clip.tokenize(texts).to(device)
+    # texts = clip.tokenize(texts).to(device)
+    texts = texts.long().to(device)
     image_features, text_features, logit_scale = model(images, texts)
     # cosine similarity as logits
     logits_per_image = logit_scale * image_features @ text_features.t()
@@ -77,7 +78,7 @@ def saliency_map(images, texts, model, preprocess, device, im_size):
     return np.array(attn_dot_ims), np.array(image_relevances), np.array(processed_images)
 
 
-def save_heatmap(images, texts, model, preprocess, device, output_fnames, im_size=224):
+def save_heatmap(images, texts, text_strs, model, preprocess, device, output_fnames, im_size=224):
     # create heatmap from mask on image
     def show_cam_on_image(img, mask):
         heatmap = cv2.applyColorMap(np.uint8(255 * mask), cv2.COLORMAP_JET)
@@ -92,7 +93,7 @@ def save_heatmap(images, texts, model, preprocess, device, output_fnames, im_siz
     for i in range(len(images)):
         attn_dot_im, attn, image = attn_dot_ims[i], attns[i], images[i]
         output_fname = output_fnames[i]
-        text = texts[i]
+        text = text_strs[i]
         vis, orig_img = show_cam_on_image(image, attn)
         vis, orig_img = np.uint8(255 * vis), np.uint8(255 * orig_img)
         attn_dot_im = np.uint8(255 * attn_dot_im)
@@ -163,12 +164,14 @@ def load_model_preprocess(checkpoint, gpu=0, device="cuda", freeze_clip=True):
     model_class = "ViT-B/32"
 
     if checkpoint:
+        print("Before dist init")
         dist.init_process_group(
             backend="nccl",
             init_method="tcp://127.0.0.1:6100",
-            world_size=torch.cuda.device_count(),
+            world_size=1,#torch.cuda.device_count(),
             rank=gpu,
         )
+        print("after dist init")
         model_config_file = os.path.join(MODEL_CONFIGS_DIR, f"{model_class.replace('/', '-')}.json")
         print('Loading model from', model_config_file)
         assert os.path.exists(model_config_file)
@@ -222,11 +225,12 @@ if __name__ == "__main__":
     file_ids_to_eval, file_id_to_annotation_map = load_eval_ids_and_file_id_to_annotation_map(args)
 
     # file_ids_to_eval = file_ids_to_eval[:2]
-    texts = [file_id_to_annotation_map[eval_id] for eval_id in file_ids_to_eval]
+    text_strs = [file_id_to_annotation_map[eval_id] for eval_id in file_ids_to_eval]
+    texts = clip.tokenize(text_strs)
     image_paths = [os.path.join(args.image_dir, f"{eval_id}.jpg") for eval_id in file_ids_to_eval]
     images = np.array([np.array(Image.open(image_path)) for image_path in image_paths])
     output_fnames = [os.path.join(args.output_dir, f"{eval_id}.jpg") for eval_id in file_ids_to_eval]
-    save_heatmap(images, texts, model, preprocess, device, output_fnames, args.im_size)
+    save_heatmap(images, texts, text_strs, model, preprocess, device, output_fnames, args.im_size)
 
     # attn_dot_im, attn, image = saliency_map(image, text, model, preprocess, device, args.im_size)
     # print("attn_dot_im", attn_dot_im.shape)
