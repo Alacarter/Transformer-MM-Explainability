@@ -229,6 +229,8 @@ if __name__ == "__main__":
     texts = clip.tokenize(text_strs)
     image_paths = [os.path.join(args.image_dir, f"{eval_id}.jpg") for eval_id in file_ids_to_eval]
     images = np.array([np.array(Image.open(image_path)) for image_path in image_paths])
+    text_strs = [file_id_to_annotation_map[eval_id] for eval_id in file_ids_to_eval]
+    texts = clip.tokenize(texts).to(device)
     output_fnames = [os.path.join(args.output_dir, f"{eval_id}.jpg") for eval_id in file_ids_to_eval]
     save_heatmap(images, texts, text_strs, model, preprocess, device, output_fnames, args.im_size)
 
