@@ -165,12 +165,21 @@ def load_model_preprocess(checkpoint, gpu=0, device="cuda", freeze_clip=True):
 
     if checkpoint:
         print("Before dist init")
-        dist.init_process_group(
-            backend="nccl",
-            init_method="tcp://127.0.0.1:6100",
-            world_size=1,#torch.cuda.device_count(),
-            rank=gpu,
-        )
+
+        successful_port = False
+        port = 6100
+        while not successful_port:
+            try:
+                dist.init_process_group(
+                    backend="nccl",
+                    init_method=f"tcp://127.0.0.1:{port}",
+                    world_size=1,#torch.cuda.device_count(),
+                    rank=gpu,
+                )
+            except:
+                port += 1
+            else:
+                successful_port = True
         print("after dist init")
         model_config_file = os.path.join(MODEL_CONFIGS_DIR, f"{model_class.replace('/', '-')}.json")
         print('Loading model from', model_config_file)
@@ -182,7 +191,8 @@ def load_model_preprocess(checkpoint, gpu=0, device="cuda", freeze_clip=True):
         preprocess = clip._transform(model.visual.input_resolution, is_train=False, color_jitter=False)
         convert_models_to_fp32(model)
         model.cuda(gpu)
-        model = torch.nn.parallel.DistributedDataParallel(model, device_ids=[gpu])
+        model = torch.nn.parallel.DistributedDataParallel(
+            model, device_ids=[gpu], find_unused_parameters=True)
 
         checkpoint = torch.load(checkpoint, map_location=device)
         sd = checkpoint["state_dict"]
