@@ -161,7 +161,12 @@ def load_eval_ids_and_file_id_to_annotation_map(args):
 
 
 def load_model_preprocess(checkpoint, gpu=0, device="cuda", freeze_clip=True):
-    model_class = "ViT-B/32"
+    possible_model_classes = ['ViT-B/32', 'RN50-small', 'RN50']
+    for possible_model_class in possible_model_classes:
+        if possible_model_class in checkpoint:
+            model_class = possible_model_class
+            print("model_class:", model_class)
+            break
 
     if checkpoint:
         print("Before dist init")
@@ -192,7 +197,8 @@ def load_model_preprocess(checkpoint, gpu=0, device="cuda", freeze_clip=True):
         convert_models_to_fp32(model)
         model.cuda(gpu)
         model = torch.nn.parallel.DistributedDataParallel(
-            model, device_ids=[gpu], find_unused_parameters=True)
+            model, device_ids=[gpu], find_unused_parameters=True,
+            broadcast_buffers=False)
 
         checkpoint = torch.load(checkpoint, map_location=device)
         sd = checkpoint["state_dict"]
