@@ -43,7 +43,8 @@ def saliency_map(images, texts, model, preprocess, device, im_size):
             R += torch.matmul(cam, R)
         R[0, 0] = 0
         image_relevance = R[0, 1:]
-        image_relevance = image_relevance.reshape(1, 1, 7, 7)
+        patch_side_length = int(np.sqrt(image_relevance.shape[0]))
+        image_relevance = image_relevance.reshape(1, 1, patch_side_length, patch_side_length)
         image_relevance = torch.nn.functional.interpolate(image_relevance, size=im_size, mode='bilinear')
         image_relevance = image_relevance.reshape(im_size, im_size).to(device).data.cpu().numpy()
         image_relevance = (image_relevance - image_relevance.min()) / (image_relevance.max() - image_relevance.min())
@@ -59,22 +60,25 @@ def saliency_map(images, texts, model, preprocess, device, im_size):
     # image = preprocess(image).unsqueeze(0).to(device)
     # texts = clip.tokenize(texts).to(device)
     texts = texts.long().to(device)
+    start_time = time.time()
     image_features, text_features, logit_scale = model(images, texts)
     # cosine similarity as logits
     logits_per_image = logit_scale * image_features @ text_features.t()
     logits_per_text = logits_per_image.t()
+    # print("foward", time.time() - start_time)
 
     probs = logits_per_image.softmax(dim=-1).detach().cpu().numpy() # doesn't seem to be used??
 
     attn_dot_ims = []
     image_relevances = []
     processed_images = []
+    start_time = time.time()
     for index in range(images.shape[0]):
         attn_dot_im, image_relevance, image = create_single_saliency_map(index, logits_per_image, images, im_size)
         attn_dot_ims.append(attn_dot_im)
         image_relevances.append(image_relevance)
         processed_images.append(image)
-
+    # print("backward", time.time() - start_time)
     return np.array(attn_dot_ims), np.array(image_relevances), np.array(processed_images)
 
 
@@ -161,7 +165,7 @@ def load_eval_ids_and_file_id_to_annotation_map(args):
 
 
 def load_model_preprocess(checkpoint, gpu=0, device="cuda", freeze_clip=True):
-    possible_model_classes = ['ViT-B/32', 'RN50-small', 'RN50']
+    possible_model_classes = ['ViT-B/32', 'RN50-small', 'RN50', 'ViT-B/16-small', 'ViT-B/16']
     for possible_model_class in possible_model_classes:
         if possible_model_class in checkpoint:
             model_class = possible_model_class
@@ -246,7 +250,7 @@ if __name__ == "__main__":
     image_paths = [os.path.join(args.image_dir, f"{eval_id}.jpg") for eval_id in file_ids_to_eval]
     images = np.array([np.array(Image.open(image_path)) for image_path in image_paths])
     text_strs = [file_id_to_annotation_map[eval_id] for eval_id in file_ids_to_eval]
-    texts = clip.tokenize(texts).to(device)
+    # texts = clip.tokenize(texts).to(device)
     output_fnames = [os.path.join(args.output_dir, f"{eval_id}.jpg") for eval_id in file_ids_to_eval]
     save_heatmap(images, texts, text_strs, model, preprocess, device, output_fnames, args.im_size)
 
