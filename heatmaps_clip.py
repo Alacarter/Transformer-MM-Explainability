@@ -19,7 +19,7 @@ import time
 
 MODEL_CONFIGS_DIR = "/scratch/cluster/albertyu/dev/open_clip/src/training/model_configs"
 #@title Control context expansion (number of attention layers to consider)
-num_layers =  10#@param {type:"number"}
+num_last_layers_for_saliency = 1 #@param {type:"number"}
 
 def saliency_map(images, texts, model, preprocess, device, im_size):
     def create_single_saliency_map(image_relevance, image):
@@ -50,8 +50,8 @@ def saliency_map(images, texts, model, preprocess, device, im_size):
         R = torch.eye(num_tokens, num_tokens, dtype=image_attn_blocks[0].attn_probs.dtype).to(device)
         R = R.unsqueeze(0).expand(batch_size, num_tokens, num_tokens)
         for i, blk in enumerate(image_attn_blocks):
-            if i <=num_layers:
-              continue
+            if i <= len(image_attn_blocks) - 1 - num_last_layers_for_saliency:
+                continue
             grad = torch.autograd.grad(one_hot, [blk.attn_probs], retain_graph=True)[0].detach()
             cam = blk.attn_probs.detach()
             cam = cam.reshape(-1, cam.shape[-1], cam.shape[-1])
