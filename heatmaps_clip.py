@@ -18,6 +18,8 @@ from tqdm import tqdm
 import time
 
 MODEL_CONFIGS_DIR = "/scratch/cluster/albertyu/dev/open_clip/src/training/model_configs"
+#@title Control context expansion (number of attention layers to consider)
+num_layers =  10#@param {type:"number"}
 
 def saliency_map(images, texts, model, preprocess, device, im_size):
     def create_single_saliency_map(image_relevance, image):
@@ -47,14 +49,6 @@ def saliency_map(images, texts, model, preprocess, device, im_size):
         num_tokens = image_attn_blocks[0].attn_probs.shape[-1]
         R = torch.eye(num_tokens, num_tokens, dtype=image_attn_blocks[0].attn_probs.dtype).to(device)
         R = R.unsqueeze(0).expand(batch_size, num_tokens, num_tokens)
-        for blk in image_attn_blocks:
-            grad = blk.attn_grad
-            cam = blk.attn_probs
-            cam = cam.reshape(-1, cam.shape[-1], cam.shape[-1])
-            grad = grad.reshape(-1, grad.shape[-1], grad.shape[-1])
-            cam = grad * cam
-            cam = cam.clamp(min=0).mean(dim=0)
-            R += torch.matmul(cam, R)
         for i, blk in enumerate(image_attn_blocks):
             if i <=num_layers:
               continue
@@ -71,8 +65,8 @@ def saliency_map(images, texts, model, preprocess, device, im_size):
         attn_dot_im_list = []
         image_relevance_list = []
         image_list = []
-        for image in image_list:
-            attn_dot_im, image_relevance, image = create_single_saliency_map(image_relevances, image)
+        for i in range(batch_size):
+            attn_dot_im, image_relevance, image = create_single_saliency_map(image_relevances[i], images[i])
             attn_dot_im_list.append(attn_dot_im)
             image_relevance_list.append(image_relevance)
             image_list.append(image)
@@ -93,7 +87,7 @@ def saliency_map(images, texts, model, preprocess, device, im_size):
 
     start_time = time.time()
     attn_dot_ims, image_relevances, images = create_saliency_maps(logits_per_image, images, im_size)
-    # print("backward", time.time() - start_time)
+    print("backward", time.time() - start_time)
     return attn_dot_ims, image_relevances, images
 
 
