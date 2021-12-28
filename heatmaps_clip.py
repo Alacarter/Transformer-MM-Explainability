@@ -20,19 +20,33 @@ import time
 MODEL_CONFIGS_DIR = "/scratch/cluster/albertyu/dev/open_clip/src/training/model_configs"
 
 def saliency_map(images, texts, model, preprocess, device, im_size):
-    def create_single_saliency_map(index, logits_per_image, images, im_size):
-        # one_hot = np.zeros((1, logits_per_image.size()[-1]), dtype=np.float32)
-        one_hot = np.zeros((images.shape[0], logits_per_image.size()[-1]), dtype=np.float32)
-        # one_hot[0, index] = 1
-        one_hot[index, index] = 1
+    def create_single_saliency_map(image_relevance, image):
+        patch_side_length = int(np.sqrt(image_relevance.shape[0]))
+        image_relevance = image_relevance.reshape(1, 1, patch_side_length, patch_side_length)
+        image_relevance = torch.nn.functional.interpolate(image_relevance, size=im_size, mode='bilinear')
+        image_relevance = image_relevance.reshape(im_size, im_size).to(device).data.cpu().numpy()
+        image_relevance = (image_relevance - image_relevance.min()) / (image_relevance.max() - image_relevance.min())
+        image = image.permute(1, 2, 0).data.cpu().numpy()
+        image = (image - image.min()) / (image.max() - image.min())
+        pil_image = Image.fromarray(np.uint8(255 * image))
+        image = pil_image.resize((im_size, im_size), resample=PIL.Image.BICUBIC)
+        image = np.float32(np.array(image)) / 255
+        attn_dot_im = np.tile(np.expand_dims(image_relevance, axis=-1), (1, 1, 3)) * image
+        return attn_dot_im, image_relevance, image
+
+    def create_saliency_maps(logits_per_image, images, im_size):
+        batch_size = images.shape[0]
+        index = [i for i in range(batch_size)]
+        one_hot = np.zeros((logits_per_image.shape[0], logits_per_image.shape[1]), dtype=np.float32)
+        one_hot[torch.arange(logits_per_image.shape[0]), index] = 1
         one_hot = torch.from_numpy(one_hot).requires_grad_(True)
-        one_hot = torch.sum(one_hot.to(device) * logits_per_image)
+        one_hot = torch.sum(one_hot.cuda() * logits_per_image)
         model.zero_grad()
-        one_hot.backward(retain_graph=True)
 
         image_attn_blocks = list(dict(model.module.visual.transformer.resblocks.named_children()).values())
         num_tokens = image_attn_blocks[0].attn_probs.shape[-1]
         R = torch.eye(num_tokens, num_tokens, dtype=image_attn_blocks[0].attn_probs.dtype).to(device)
+        R = R.unsqueeze(0).expand(batch_size, num_tokens, num_tokens)
         for blk in image_attn_blocks:
             grad = blk.attn_grad
             cam = blk.attn_probs
@@ -41,20 +55,28 @@ def saliency_map(images, texts, model, preprocess, device, im_size):
             cam = grad * cam
             cam = cam.clamp(min=0).mean(dim=0)
             R += torch.matmul(cam, R)
-        R[0, 0] = 0
-        image_relevance = R[0, 1:]
-        patch_side_length = int(np.sqrt(image_relevance.shape[0]))
-        image_relevance = image_relevance.reshape(1, 1, patch_side_length, patch_side_length)
-        image_relevance = torch.nn.functional.interpolate(image_relevance, size=im_size, mode='bilinear')
-        image_relevance = image_relevance.reshape(im_size, im_size).to(device).data.cpu().numpy()
-        image_relevance = (image_relevance - image_relevance.min()) / (image_relevance.max() - image_relevance.min())
-        image = images[index].permute(1, 2, 0).data.cpu().numpy()
-        image = (image - image.min()) / (image.max() - image.min())
-        pil_image = Image.fromarray(np.uint8(255 * image))
-        image = pil_image.resize((im_size, im_size), resample=PIL.Image.BICUBIC)
-        image = np.float32(np.array(image)) / 255
-        attn_dot_im = np.tile(np.expand_dims(image_relevance, axis=-1), (1, 1, 3)) * image
-        return attn_dot_im, image_relevance, image
+        for i, blk in enumerate(image_attn_blocks):
+            if i <=num_layers:
+              continue
+            grad = torch.autograd.grad(one_hot, [blk.attn_probs], retain_graph=True)[0].detach()
+            cam = blk.attn_probs.detach()
+            cam = cam.reshape(-1, cam.shape[-1], cam.shape[-1])
+            grad = grad.reshape(-1, grad.shape[-1], grad.shape[-1])
+            cam = grad * cam
+            cam = cam.reshape(batch_size, -1, cam.shape[-1], cam.shape[-1])
+            cam = cam.clamp(min=0).mean(dim=1)
+            R = R + torch.bmm(cam, R)
+        image_relevances = R[:, 0, 1:]
+
+        attn_dot_im_list = []
+        image_relevance_list = []
+        image_list = []
+        for image in image_list:
+            attn_dot_im, image_relevance, image = create_single_saliency_map(image_relevances, image)
+            attn_dot_im_list.append(attn_dot_im)
+            image_relevance_list.append(image_relevance)
+            image_list.append(image)
+        return np.array(attn_dot_im_list), np.array(image_relevance_list), np.array(image_list)
 
     images = torch.cat([preprocess(Image.fromarray(im)).unsqueeze(0).to(device) for im in images])
     # image = preprocess(image).unsqueeze(0).to(device)
@@ -69,17 +91,10 @@ def saliency_map(images, texts, model, preprocess, device, im_size):
 
     probs = logits_per_image.softmax(dim=-1).detach().cpu().numpy() # doesn't seem to be used??
 
-    attn_dot_ims = []
-    image_relevances = []
-    processed_images = []
     start_time = time.time()
-    for index in range(images.shape[0]):
-        attn_dot_im, image_relevance, image = create_single_saliency_map(index, logits_per_image, images, im_size)
-        attn_dot_ims.append(attn_dot_im)
-        image_relevances.append(image_relevance)
-        processed_images.append(image)
+    attn_dot_ims, image_relevances, images = create_saliency_maps(logits_per_image, images, im_size)
     # print("backward", time.time() - start_time)
-    return np.array(attn_dot_ims), np.array(image_relevances), np.array(processed_images)
+    return attn_dot_ims, image_relevances, images
 
 
 def save_heatmap(images, texts, text_strs, model, preprocess, device, output_fnames, im_size=224):
