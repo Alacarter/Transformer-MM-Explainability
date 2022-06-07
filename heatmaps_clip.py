@@ -45,7 +45,10 @@ def saliency_map(images, texts, model, preprocess, device, im_size):
         one_hot = torch.sum(one_hot.cuda() * logits_per_image)
         model.zero_grad()
 
-        image_attn_blocks = list(dict(model.module.visual.transformer.resblocks.named_children()).values())
+        try:
+            image_attn_blocks = list(dict(model.module.visual.transformer.resblocks.named_children()).values())
+        except:
+            image_attn_blocks = list(dict(model.visual.transformer.resblocks.named_children()).values())
         num_tokens = image_attn_blocks[0].attn_probs.shape[-1]
         R = torch.eye(num_tokens, num_tokens, dtype=image_attn_blocks[0].attn_probs.dtype).to(device)
         R = R.unsqueeze(0).expand(batch_size, num_tokens, num_tokens)
@@ -87,7 +90,7 @@ def saliency_map(images, texts, model, preprocess, device, im_size):
 
     start_time = time.time()
     attn_dot_ims, image_relevances, images = create_saliency_maps(logits_per_image, images, im_size)
-    print("backward", time.time() - start_time)
+    # print("backward", time.time() - start_time)
     return attn_dot_ims, image_relevances, images
 
 
@@ -140,11 +143,12 @@ class color:
 
 
 def load_eval_ids_and_file_id_to_annotation_map(args):
-    with open(args.val_file, "r") as f:
-        lines = f.readlines()
-        val_ex = []
-        for line in lines:
-            val_ex.append(int(line.rstrip().split(".jpg")[0]))
+    if args.val_file:
+        with open(args.val_file, "r") as f:
+            lines = f.readlines()
+            val_ex = []
+            for line in lines:
+                val_ex.append(int(line.rstrip().split(".jpg")[0]))
 
     with open(args.test_file, "r") as f:
         lines = f.readlines()
@@ -169,19 +173,18 @@ def load_eval_ids_and_file_id_to_annotation_map(args):
         (len(file_id_to_annotation_map[key].split(" ")) == 2)
     ]
     file_ids_to_eval = np.concatenate((file_ids_to_eval, np.array(wall_only_file_ids), np.array(wall_pair_file_ids)))
-    print("file_ids_to_eval", file_ids_to_eval)
+    file_ids_to_eval = [int(eval_id) for eval_id in file_ids_to_eval]
     return file_ids_to_eval, file_id_to_annotation_map
 
 
 def load_model_preprocess(checkpoint, gpu=0, device="cuda", freeze_clip=True):
-    possible_model_classes = ['ViT-B/32', 'RN50-small', 'RN50', 'ViT-B/16-small', 'ViT-B/16']
-    for possible_model_class in possible_model_classes:
-        if possible_model_class in checkpoint:
-            model_class = possible_model_class
-            print("model_class:", model_class)
-            break
-
     if checkpoint:
+        possible_model_classes = ['ViT-B/32', 'RN50-small', 'RN50', 'ViT-B/16-small', 'ViT-B/16']
+        for possible_model_class in possible_model_classes:
+            if possible_model_class in checkpoint:
+                model_class = possible_model_class
+                print("model_class:", model_class)
+                break
         print("Before dist init")
 
         successful_port = False
@@ -224,7 +227,9 @@ def load_model_preprocess(checkpoint, gpu=0, device="cuda", freeze_clip=True):
             print("Allowing clip to be finetuneable")
             model.train()
     else:
-        model, preprocess = clip.load(model_class, device=device, jit=False)
+        # the _ is preprocess for training (has color jitter)
+        model, _, preprocess = clip.load(
+            args.pretrained_model_class, color_jitter=False, device=device, jit=False)
 
     return model, preprocess
 
@@ -233,12 +238,15 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--num-evals", type=int, required=True)
     # Below: Saliency-like filepaths.
-    parser.add_argument("--val-file", type=str, required=True)
+    parser.add_argument("--val-file", type=str, required=False, default="")
     parser.add_argument("--test-file", type=str, required=True)
     parser.add_argument("--annotations-path", type=str, required=True)
 
     # open_clip-trained checkpoint
     parser.add_argument("--checkpoint", type=str, default=None)
+    # pretrained-model-class only used if no checkpoint passed in
+    parser.add_argument("--pretrained-model-class", type=str,
+        choices=['ViT-B/32', 'RN50-small', 'RN50', 'ViT-B/16-small', 'ViT-B/16'])
     parser.add_argument("--gpu", type=int, default=None)
     parser.add_argument("--image-dir", type=str, required=True)
     parser.add_argument("--output-dir", type=str, default="output_heatmaps")
@@ -256,11 +264,11 @@ if __name__ == "__main__":
     # file_ids_to_eval = file_ids_to_eval[:2]
     text_strs = [file_id_to_annotation_map[eval_id] for eval_id in file_ids_to_eval]
     texts = clip.tokenize(text_strs)
-    image_paths = [os.path.join(args.image_dir, f"{eval_id}.jpg") for eval_id in file_ids_to_eval]
+    image_paths = [os.path.join(args.image_dir, f"{int(eval_id)}.jpg") for eval_id in file_ids_to_eval]
     images = np.array([np.array(Image.open(image_path)) for image_path in image_paths])
     text_strs = [file_id_to_annotation_map[eval_id] for eval_id in file_ids_to_eval]
     # texts = clip.tokenize(texts).to(device)
-    output_fnames = [os.path.join(args.output_dir, f"{eval_id}.jpg") for eval_id in file_ids_to_eval]
+    output_fnames = [os.path.join(args.output_dir, f"{int(eval_id)}.jpg") for eval_id in file_ids_to_eval]
     save_heatmap(images, texts, text_strs, model, preprocess, device, output_fnames, args.im_size)
 
     # attn_dot_im, attn, image = saliency_map(image, text, model, preprocess, device, args.im_size)
