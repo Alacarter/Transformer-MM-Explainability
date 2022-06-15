@@ -255,6 +255,7 @@ if __name__ == "__main__":
     parser.add_argument("--image-dir", type=str, required=True)
     parser.add_argument("--output-dir", type=str, default="output_heatmaps")
     parser.add_argument("--im-size", type=int, default=224)
+    parser.add_argument("--tokenize_scheme", type=str, required=True)
     args = parser.parse_args()
 
     if not os.path.exists(args.output_dir):
@@ -267,7 +268,9 @@ if __name__ == "__main__":
 
     # file_ids_to_eval = file_ids_to_eval[:2]
     text_strs = [file_id_to_annotation_map[eval_id] for eval_id in file_ids_to_eval]
-    texts = clip.tokenize(text_strs)
+    tokenize_fn = clip.get_tokenize_fn(args.tokenize_scheme)
+    texts = tokenize_fn(text_strs)
+    print("texts", texts)
     image_paths = [os.path.join(args.image_dir, f"{int(eval_id)}.jpg") for eval_id in file_ids_to_eval]
     images = np.array([np.array(Image.open(image_path)) for image_path in image_paths])
     text_strs = [file_id_to_annotation_map[eval_id] for eval_id in file_ids_to_eval]
