@@ -255,7 +255,7 @@ if __name__ == "__main__":
     parser.add_argument("--image-dir", type=str, required=True)
     parser.add_argument("--output-dir", type=str, default="output_heatmaps")
     parser.add_argument("--im-size", type=int, default=224)
-    parser.add_argument("--tokenize_scheme", type=str, required=True)
+    parser.add_argument("--tokenize-scheme", type=str, required=True, choices=['clip', 'custom'])
     args = parser.parse_args()
 
     if not os.path.exists(args.output_dir):
