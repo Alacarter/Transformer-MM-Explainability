@@ -69,7 +69,9 @@ def saliency_map(images, texts, model, preprocess, device, im_size):
         image_relevance_list = []
         image_list = []
         for i in range(batch_size):
+            st = time.time()
             attn_dot_im, image_relevance, image = create_single_saliency_map(image_relevances[i], images[i])
+            print("create_single_saliency_map call", st - time.time())
             attn_dot_im_list.append(attn_dot_im)
             image_relevance_list.append(image_relevance)
             image_list.append(image)
@@ -104,7 +106,9 @@ def save_heatmap(images, texts, text_strs, model, preprocess, device, output_fna
         cam = cam / np.max(cam)
         return cam, img
 
+    t = time.time()
     attn_dot_ims, attns, images = saliency_map(images, texts, model, preprocess, device, im_size=im_size)
+    print("time for one saliency_map call:", time.time() - t)
 
     for i in range(len(images)):
         attn_dot_im, attn, image = attn_dot_ims[i], attns[i], images[i]
@@ -195,7 +199,7 @@ def load_model_preprocess(checkpoint, gpu=0, device="cuda", freeze_clip=True):
                     backend="nccl",
                     init_method=f"tcp://127.0.0.1:{port}",
                     world_size=1,#torch.cuda.device_count(),
-                    rank=gpu,
+                    rank=0,
                 )
             except:
                 port += 1
@@ -254,7 +258,7 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     if not os.path.exists(args.output_dir):
-        os.mkdir(args.output_dir)
+        os.makedirs(args.output_dir)
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model, preprocess = load_model_preprocess(args.checkpoint, args.gpu)
