@@ -1,6 +1,7 @@
 import torch
 # import CLIP.clip as clip_orig # OpenAI/CLIP
 from clip import clip # open_clip repo
+import ipdb; ipdb.set_trace()
 from clip.model import * # open_clip repo
 from training.main import convert_models_to_fp32 # open_clip repo
 import torch.distributed as dist

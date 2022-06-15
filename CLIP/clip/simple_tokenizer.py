@@ -130,3 +130,51 @@ class SimpleTokenizer(object):
         text = ''.join([self.decoder[token] for token in tokens])
         text = bytearray([self.byte_decoder[c] for c in text]).decode('utf-8', errors="replace").replace('</w>', ' ')
         return text
+
+# class Vocab(Vocabulary):
+#     def __init__(self, *args, **kwargs):
+#         super().__init__(*args, **kwargs)
+
+#     def update(self, *args, **kwargs):
+#         super().update(*args, **kwargs)
+#         self.tokens = ['<PAD>', '<UNK>', '<start_of_text>', '<end_of_text>'] + list(self.counts.keys())
+
+#     def tokens_to_idx(self, text, output_list=True):
+#         tokens = text.split(" ")
+#         if len(tokens) == 1 and not output_list:
+#             token = tokens[0]
+#             if token in self.tokens:
+#                 return self.tokens.index(token)
+#             else:
+#                 return self.tokens.index('<UNK>')
+#         else:
+#             idxs = []
+#             for token in tokens:
+#                 idx = self.tokens_to_idx(token, output_list=False)
+#                 idxs.append(idx)
+#             return idxs
+
+#     def idxs_to_tokens(self, idxs):
+#         assert isinstance(tokens, list)
+#         return [self.tokens[idx] for idx in idxs]
+
+#     def size(self):
+#         return len(self.tokens)
+
+
+# class CustomTokenizer(object):
+#     def __init__(self):
+#         self.vocab = Vocab([], unk_cutoff=1)
+#         vocab_path = "/scratch/cluster/albertyu/datasets/202110260345_fruitbot_image_instruction/20211026_train_20211220_vocab.txt"
+#         with open(vocab_path, "r") as f:
+#             vocab_list = f.readlines()
+#         vocab_list = [basic_clean(vocab) for vocab in vocab_list]
+#         self.vocab.update(vocab_list)
+#         self.sot_token = self.vocab.tokens_to_idx('<start_of_text>')[0]
+#         self.eot_token = self.vocab.tokens_to_idx('<end_of_text>')[0]
+
+#     def encode(self, text):
+#         return self.vocab.tokens_to_idx(text)
+
+#     def decode(self, tokens):
+#         return self.vocab.idxs_to_tokens(tokens)
