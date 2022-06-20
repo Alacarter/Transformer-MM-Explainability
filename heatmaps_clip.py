@@ -1,7 +1,6 @@
 import torch
 # import CLIP.clip as clip_orig # OpenAI/CLIP
 from clip import clip # open_clip repo
-import ipdb; ipdb.set_trace()
 from clip.model import * # open_clip repo
 from training.main import convert_models_to_fp32 # open_clip repo
 import torch.distributed as dist
@@ -23,7 +22,7 @@ MODEL_CONFIGS_DIR = "/scratch/cluster/albertyu/dev/open_clip/src/training/model_
 num_last_layers_for_saliency = 1 #@param {type:"number"}
 
 def saliency_map(images, texts, model, preprocess, device, im_size):
-    def create_single_saliency_map(image_relevance, image):
+    def create_single_saliency_map(image_relevance, image, device):
         patch_side_length = int(np.sqrt(image_relevance.shape[0]))
         image_relevance = image_relevance.reshape(1, 1, patch_side_length, patch_side_length)
         image_relevance = torch.nn.functional.interpolate(image_relevance, size=im_size, mode='bilinear')
@@ -37,13 +36,13 @@ def saliency_map(images, texts, model, preprocess, device, im_size):
         attn_dot_im = np.tile(np.expand_dims(image_relevance, axis=-1), (1, 1, 3)) * image
         return attn_dot_im, image_relevance, image
 
-    def create_saliency_maps(logits_per_image, images, im_size):
+    def create_saliency_maps(logits_per_image, images, im_size, device):
         batch_size = images.shape[0]
         index = [i for i in range(batch_size)]
         one_hot = np.zeros((logits_per_image.shape[0], logits_per_image.shape[1]), dtype=np.float32)
         one_hot[torch.arange(logits_per_image.shape[0]), index] = 1
         one_hot = torch.from_numpy(one_hot).requires_grad_(True)
-        one_hot = torch.sum(one_hot.cuda() * logits_per_image)
+        one_hot = torch.sum(one_hot.to(device) * logits_per_image)
         model.zero_grad()
 
         try:
@@ -70,9 +69,9 @@ def saliency_map(images, texts, model, preprocess, device, im_size):
         image_relevance_list = []
         image_list = []
         for i in range(batch_size):
-            st = time.time()
-            attn_dot_im, image_relevance, image = create_single_saliency_map(image_relevances[i], images[i])
-            print("create_single_saliency_map call", st - time.time())
+            # st = time.time()
+            attn_dot_im, image_relevance, image = create_single_saliency_map(image_relevances[i], images[i], device)
+            # print("create_single_saliency_map call", st - time.time())
             attn_dot_im_list.append(attn_dot_im)
             image_relevance_list.append(image_relevance)
             image_list.append(image)
@@ -92,7 +91,7 @@ def saliency_map(images, texts, model, preprocess, device, im_size):
     probs = logits_per_image.softmax(dim=-1).detach().cpu().numpy() # doesn't seem to be used??
 
     start_time = time.time()
-    attn_dot_ims, image_relevances, images = create_saliency_maps(logits_per_image, images, im_size)
+    attn_dot_ims, image_relevances, images = create_saliency_maps(logits_per_image, images, im_size, device)
     # print("backward", time.time() - start_time)
     return attn_dot_ims, image_relevances, images
 
@@ -107,9 +106,9 @@ def save_heatmap(images, texts, text_strs, model, preprocess, device, output_fna
         cam = cam / np.max(cam)
         return cam, img
 
-    t = time.time()
+    # t = time.time()
     attn_dot_ims, attns, images = saliency_map(images, texts, model, preprocess, device, im_size=im_size)
-    print("time for one saliency_map call:", time.time() - t)
+    # print("time for one saliency_map call:", time.time() - t)
 
     for i in range(len(images)):
         attn_dot_im, attn, image = attn_dot_ims[i], attns[i], images[i]
@@ -182,7 +181,8 @@ def load_eval_ids_and_file_id_to_annotation_map(args):
     return file_ids_to_eval, file_id_to_annotation_map
 
 
-def load_model_preprocess(checkpoint, gpu=0, device="cuda", freeze_clip=True):
+def load_model_preprocess(checkpoint, gpu=0, freeze_clip=True):
+    device = f"cuda:{gpu}"
     if checkpoint:
         possible_model_classes = ['ViT-B/32', 'RN50-small', 'RN50', 'ViT-B/16-small', 'ViT-B/16']
         for possible_model_class in possible_model_classes:
@@ -262,7 +262,7 @@ if __name__ == "__main__":
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
 
-    device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = f"cuda:{gpu}" if torch.cuda.is_available() else "cpu"
     model, preprocess = load_model_preprocess(args.checkpoint, args.gpu)
 
     file_ids_to_eval, file_id_to_annotation_map = load_eval_ids_and_file_id_to_annotation_map(args)
