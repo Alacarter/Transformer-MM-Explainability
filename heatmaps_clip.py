@@ -182,7 +182,7 @@ def load_eval_ids_and_file_id_to_annotation_map(args):
     return file_ids_to_eval, file_id_to_annotation_map
 
 
-def load_model_preprocess(checkpoint, gpu=0, device="cuda", freeze_clip=True):
+def load_model_preprocess(checkpoint, gpu=0, device="cuda", freeze_clip=True, input_type="Image"):
     if checkpoint:
         possible_model_classes = ['ViT-B/32', 'RN50-small', 'RN50', 'ViT-B/16-small', 'ViT-B/16']
         for possible_model_class in possible_model_classes:
@@ -214,7 +214,8 @@ def load_model_preprocess(checkpoint, gpu=0, device="cuda", freeze_clip=True):
             model_info = json.load(f)
         model = CLIP(**model_info)
         convert_weights(model)
-        preprocess = clip._transform(model.visual.input_resolution, is_train=False, color_jitter=False)
+        preprocess = clip._transform(
+            model.visual.input_resolution, is_train=False, color_jitter=False, input_type=input_type)
         convert_models_to_fp32(model)
         model.cuda(gpu)
         model = torch.nn.parallel.DistributedDataParallel(
