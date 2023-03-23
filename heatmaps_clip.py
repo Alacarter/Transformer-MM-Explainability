@@ -11,7 +11,6 @@ from pathlib import Path
 import json
 import numpy as np
 import cv2
-import matplotlib.pyplot as plt
 import os
 import argparse
 from tqdm import tqdm
@@ -263,7 +262,7 @@ if __name__ == "__main__":
     if not os.path.exists(args.output_dir):
         os.makedirs(args.output_dir)
 
-    device = f"cuda:{gpu}" if torch.cuda.is_available() else "cpu"
+    device = f"cuda:{args.gpu}" if torch.cuda.is_available() else "cpu"
     model, preprocess = load_model_preprocess(args.checkpoint, args.gpu)
 
     file_ids_to_eval, file_id_to_annotation_map = load_eval_ids_and_file_id_to_annotation_map(args)
@@ -278,6 +277,7 @@ if __name__ == "__main__":
     text_strs = [file_id_to_annotation_map[eval_id] for eval_id in file_ids_to_eval]
     # texts = clip.tokenize(texts).to(device)
     output_fnames = [os.path.join(args.output_dir, f"{int(eval_id)}.jpg") for eval_id in file_ids_to_eval]
+    import matplotlib.pyplot as plt
     save_heatmap(images, texts, text_strs, model, preprocess, device, output_fnames, args.im_size)
 
     # attn_dot_im, attn, image = saliency_map(image, text, model, preprocess, device, args.im_size)
